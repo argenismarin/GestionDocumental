@@ -1,0 +1,28 @@
+# Recorre recursivamente todos los archivos que contengan " - copia" en su nombre
+Get-ChildItem -Recurse -File | ForEach-Object {
+    $oldName = $_.Name
+    # Se busca el patrón: cualquier cosa, luego " - copia" y la extensión (p. ej. "documento - copia.txt")
+    if ($oldName -match "^(.*) - copia(\.[^.]+)$") {
+        $baseName   = $matches[1]
+        $extension  = $matches[2]
+        $newName    = "$baseName$extension"
+        $parentPath = $_.DirectoryName
+        $newFilePath = Join-Path -Path $parentPath -ChildPath $newName
+        
+        if (Test-Path -LiteralPath $newFilePath) {
+            # Existe un archivo con el nombre original, comparar tamaños
+            $originalFile = Get-Item -LiteralPath $newFilePath
+            if ($_.Length -eq $originalFile.Length) {
+                Write-Host "Eliminando duplicado '$oldName' (mismo tamaño que '$newName')" -ForegroundColor Green
+                Remove-Item -LiteralPath $_.FullName -Force
+            }
+            else {
+                Write-Host "Conflicto: '$newName' ya existe con un tamaño distinto. Se mantiene '$oldName'" -ForegroundColor Yellow
+            }
+        }
+        else {
+            Write-Host "Renombrando '$oldName' a '$newName'" -ForegroundColor Cyan
+            Rename-Item -LiteralPath $_.FullName -NewName $newName
+        }
+    }
+}
