@@ -1,0 +1,39 @@
+@echo off
+REM Cambiar la página de códigos para soportar tildes (puedes usar 1252 o 65001 según convenga)
+chcp 1252 >nul
+setlocal EnableDelayedExpansion
+
+REM Nombre del archivo de salida
+set output=archivos.txt
+
+REM Inicializar contador
+set count=0
+
+REM Crear/limpiar archivo de salida y escribir encabezado con separador punto y coma
+> "%output%" echo Archivo;Tamaño (bytes)
+
+REM Recorrer de manera recursiva todos los archivos en el directorio actual y subdirectorios
+for /r %%F in (*) do (
+    REM Incrementar contador
+    set /a count+=1
+
+    REM Obtener la ruta absoluta del archivo y convertirla a relativa removiendo el directorio actual
+    set "ruta=%%F"
+    set "ruta=!ruta:%CD%\=!"
+    REM Si la ruta comienza con una barra invertida, quitarla para obtener la ruta relativa correcta
+    if "!ruta:~0,1!"=="\" set "ruta=!ruta:~1!"
+
+    REM Escribir la ruta relativa y el tamaño en bytes en el archivo de salida usando ; como separador
+    >> "%output%" echo !ruta!;%%~zF
+
+    REM Mostrar el progreso en pantalla con la ruta relativa
+    echo [!count!] Procesando: !ruta!
+)
+
+REM Escribir el total de archivos en el archivo de salida
+>> "%output%" echo.
+>> "%output%" echo Total de archivos: !count!
+
+echo.
+echo La lista de archivos se ha guardado en %output%.
+pause
