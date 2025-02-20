@@ -1,0 +1,130 @@
+# Función para copiar recursivamente los contenidos de una carpeta (source) en otra (target),
+# tratando conflictos: si un archivo ya existe, se compara su tamaño y, si difiere, se copia con un sufijo.
+function Merge-Folders {
+    param (
+        [string]$TargetFolder,
+        [string]$SourceFolder
+    )
+    # Recorre todos los elementos (archivos y carpetas) en $SourceFolder
+    Get-ChildItem -Path $SourceFolder -Recurse | ForEach-Object {
+        # Obtiene la ruta relativa del elemento respecto a $SourceFolder
+        $relativePath = $_.FullName.Substring($SourceFolder.Length)
+        $destination = Join-Path $TargetFolder $relativePath
+
+        if ($_.PSIsContainer) {
+            # Si es carpeta, se asegura de que exista en destino
+            if (-not (Test-Path -LiteralPath $destination)) {
+                New-Item -ItemType Directory -Path $destination | Out-Null
+            }
+        }
+        else {
+            # Si es archivo:
+            if (-not (Test-Path -LiteralPath $destination)) {
+                # Si no existe en destino, se copia normalmente
+                Copy-Item -LiteralPath $_.FullName -Destination $destination
+            }
+            else {
+                # Si ya existe, se compara su tamaño
+                $targetFile = Get-Item -LiteralPath $destination
+                if ($_.Length -ne $targetFile.Length) {
+                    # Si difieren, se copia el archivo de $SourceFolder con un sufijo para evitar sobrescribir
+                    $destDir = Split-Path -Path $destination
+                    $baseName = [IO.Path]::GetFileNameWithoutExtension($destination)
+                    $ext = [IO.Path]::GetExtension($destination)
+                    $newDest = Join-Path $destDir ("$baseName`_conflict$ext")
+                    Write-Host "Conflicto en '$destination'. Copiando archivo conflictivo como '$newDest'."
+                    Copy-Item -LiteralPath $_.FullName -Destination $newDest
+                }
+                # Si tienen el mismo tamaño se asume que son idénticos y no se hace nada.
+            }
+        }
+    }
+}
+
+# Función que obtiene un diccionario de archivos (clave: ruta relativa, valor: tamaño) de una carpeta.
+function Get-RelativeFiles {
+    param (
+        [string]$FolderPath
+    )
+    $files = Get-ChildItem -Path $FolderPath -Recurse -File
+    $dict = @{}
+    foreach ($file in $files) {
+        # Se obtiene la ruta relativa; se remueve la barra inicial si existe.
+        $relative = $file.FullName.Substring($FolderPath.Length).TrimStart('\')
+        $dict[$relative] = $file.Length
+    }
+    return $dict
+}
+
+# Procesa de forma recursiva las carpetas que tengan " - copia" al final del nombre.
+# Se ordenan de las más profundas a las superiores para evitar problemas al renombrar.
+$duplicateDirs = Get-ChildItem -Recurse -Directory | Where-Object { $_.Name -match " - copia$" } |
+    Sort-Object { ($_.FullName -split [regex]::Escape([IO.Path]::DirectorySeparatorChar)).Count } -Descending
+
+foreach ($dupDir in $duplicateDirs) {
+    $parentPath = $dupDir.Parent.FullName
+    # Se elimina la cadena " - copia" al final para obtener el nombre base
+    $baseName = $dupDir.Name -replace " - copia$",""
+    $originalFolderPath = Join-Path $parentPath $baseName
+
+    if (Test-Path -LiteralPath $originalFolderPath) {
+        Write-Host "Encontrado par de carpetas: '$originalFolderPath' y '$($dupDir.FullName)'."
+        
+        # Se obtienen los listados de archivos (con sus tamaños) de cada carpeta
+        $origFiles = Get-RelativeFiles -FolderPath $originalFolderPath
+        $dupFiles  = Get-RelativeFiles -FolderPath $dupDir.FullName
+
+        # Se reúnen todas las rutas relativas encontradas en ambos listados
+        $allKeys = ($origFiles.Keys + $dupFiles.Keys) | Select-Object -Unique
+        $identical = $true
+        foreach ($key in $allKeys) {
+            if ($origFiles.ContainsKey($key) -and $dupFiles.ContainsKey($key)) {
+                if ($origFiles[$key] -ne $dupFiles[$key]) {
+                    $identical = $false
+                    break
+                }
+            }
+            else {
+                $identical = $false
+                break
+            }
+        }
+
+        if ($identical) {
+            Write-Host "Las carpetas son idénticas. Eliminando la carpeta duplicada '$($dupDir.FullName)'." -ForegroundColor Green
+            Remove-Item -LiteralPath $dupDir.FullName -Recurse -Force
+        }
+        else {
+            Write-Host "Las carpetas difieren. Se realizará una consolidación de contenidos..."
+            # Se crea una carpeta temporal para consolidar el contenido
+            $consolidatedTemp = Join-Path $parentPath "$baseName`_Consolidado_temp"
+            if (Test-Path -LiteralPath $consolidatedTemp) {
+                Remove-Item -LiteralPath $consolidatedTemp -Recurse -Force
+            }
+            New-Item -ItemType Directory -Path $consolidatedTemp | Out-Null
+
+            # Se copian los contenidos de la carpeta original
+            Write-Host "Copiando contenido de '$originalFolderPath' a la carpeta consolidada..."
+            Copy-Item -LiteralPath (Join-Path $originalFolderPath '*') -Destination $consolidatedTemp -Recurse
+
+            # Se fusionan los contenidos de la carpeta duplicada (resolviendo conflictos si los hubiera)
+            Merge-Folders -TargetFolder $consolidatedTemp -SourceFolder $dupDir.FullName
+
+            # Se eliminan las carpetas originales y duplicadas
+            Write-Host "Eliminando las carpetas originales y duplicadas..."
+            Remove-Item -LiteralPath $originalFolderPath -Recurse -Force
+            Remove-Item -LiteralPath $dupDir.FullName -Recurse -Force
+
+            # Se renombra la carpeta consolidada a la denominación original
+            $finalConsolidated = Join-Path $parentPath $baseName
+            Rename-Item -LiteralPath $consolidatedTemp -NewName $baseName
+            Write-Host "Carpetas consolidadas en '$finalConsolidated'." -ForegroundColor Cyan
+        }
+    }
+    else {
+        # Si no existe la carpeta “original”, se renombra la duplicada eliminando " - copia"
+        $newName = $dupDir.Name -replace " - copia$",""
+        Write-Host "Renombrando carpeta '$($dupDir.FullName)' a '$newName'." -ForegroundColor Cyan
+        Rename-Item -LiteralPath $dupDir.FullName -NewName $newName
+    }
+}
